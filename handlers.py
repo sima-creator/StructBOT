@@ -1,15 +1,17 @@
 import logging
 import re
-from telegram import Update
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler
-from config import ADMIN_ID, SUBJECTS_TOPICS, PRICES, admin_states
+from config import ADMIN_ID, SUBJECTS_TOPICS, PRICES, admin_states, ORDER_STATUSES
 from database import db
 from keyboards import (
     main_keyboard, subjects_keyboard, topics_keyboard,
-    admin_panel_keyboard, admin_cancel_keyboard, admin_users_keyboard
+    admin_panel_keyboard, admin_cancel_keyboard, admin_users_keyboard,
+    admin_orders_keyboard, order_actions_keyboard, quick_reply_inline_keyboard
 )
 from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user, \
-    send_message_with_notify
+    send_message_with_notify, notify_user_order_status
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Выбери нужный раздел:"""
 
-    await send_message_with_notify(update, context, welcome_text, "/start")
+    await update.message.reply_text(welcome_text, reply_markup=main_keyboard())
 
 
 async def handle_subjects(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,7 +86,9 @@ async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_T
 ⏰ Срок выполнения: 7 дней
 
 🛒 Для оформления заказа нажми '🛒 Корзина'"""
-            await send_message_with_notify(update, context, text, f"Тема: {topic} для {subject}")
+
+            await update.message.reply_text(text, reply_markup=main_keyboard())
+            await notify_admin(context.application, user, text, f"Тема: {topic} для {subject}")
 
 
 async def handle_custom_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +116,8 @@ async def handle_custom_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 🛒 Для оформления заказа нажми '🛒 Корзина'"""
 
-        await send_message_with_notify(update, context, text, f"Своя тема: {custom_topic} для {subject}")
+        await update.message.reply_text(text, reply_markup=main_keyboard())
+        await notify_admin(context.application, user, text, f"Своя тема: {custom_topic} для {subject}")
     else:
         await send_message_with_notify(update, context, "Сначала выбери предмет 👆")
 
@@ -142,11 +147,88 @@ async def handle_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📝 Тема: {topic}
 💰 Стоимость: {price} руб.
 
-💳 Для оплаты свяжитесь с менеджером: @manager"""
+💳 Для оформления заказа нажмите кнопку ниже👇"""
 
-        await send_message_with_notify(update, context, cart_text, "Просмотр корзины")
+        keyboard = [
+            ['✅ Оформить заказ'],
+            ['↩️ Назад в меню']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+        await update.message.reply_text(cart_text, reply_markup=reply_markup)
+        db.save_user_activity(user.id, "cart_view", "Просмотр корзины")
+
     else:
-        await send_message_with_notify(update, context, "🛒 Корзина пуста. Сначала выбери тему работы!", "Корзина пуста")
+        await update.message.reply_text(
+            "🛒 Корзина пуста. Сначала выбери тему работы!",
+            reply_markup=main_keyboard()
+        )
+        db.save_user_activity(user.id, "empty_cart", "Корзина пуста")
+
+
+async def create_order_from_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создает заказ из корзины"""
+    user = update.effective_user
+    selection = db.get_user_selection(user.id)
+
+    if not selection or not (selection.get('topic') or selection.get('custom_topic')):
+        await update.message.reply_text("❌ Нет данных для создания заказа", reply_markup=main_keyboard())
+        return
+
+    subject = selection.get('subject', 'Не выбран')
+    topic = selection.get('custom_topic') or selection.get('topic', 'Не выбрана')
+    price = selection.get('price', 0)
+
+    # Создаем заказ в базе данных
+    order_id = db.create_order(user.id, subject, topic, selection.get('custom_topic'), price)
+
+    if order_id:
+        # Уведомляем админа о новом заказе
+        await notify_admin_new_order(context, user, order_id, subject, topic, price)
+
+        # Очищаем корзину пользователя
+        db.delete_user_selection(user.id)
+
+        order_text = f"""✅ Заказ оформлен!
+
+📋 Номер заказа: #{order_id}
+📚 Предмет: {subject}
+📝 Тема: {topic}
+💰 Стоимость: {price} руб.
+📞 Статус: {ORDER_STATUSES['working']}
+
+💬 Мы свяжемся с вами в ближайшее время для уточнения деталей."""
+
+        await update.message.reply_text(order_text, reply_markup=main_keyboard())
+        db.save_user_activity(user.id, "order_created", f"Создан заказ #{order_id}")
+
+    else:
+        await update.message.reply_text("❌ Ошибка при создании заказа", reply_markup=main_keyboard())
+
+
+async def notify_admin_new_order(context, user, order_id, subject, topic, price):
+    """Уведомляет админа о новом заказе"""
+    try:
+        admin_message = f"""🆕 НОВЫЙ ЗАКАЗ #{order_id}
+
+👤 Пользователь:
+🆔 ID: {user.id}
+👤 Имя: {user.first_name}
+📱 @{user.username if user.username else 'нет'}
+
+📋 Детали заказа:
+📚 Предмет: {subject}
+📝 Тема: {topic}
+💰 Стоимость: {price} руб.
+⏰ Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
+
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_message,
+            reply_markup=order_actions_keyboard(order_id)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админа о новом заказе: {e}")
 
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -167,8 +249,8 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if text == '👥 Пользователи':
         await admin_users(update, context)
-    elif text == '📊 Статистика':
-        await admin_stats(update, context)
+    elif text == '📦 Заказы':
+        await admin_orders(update, context)
     elif text == '📢 Общая рассылка':
         admin_states[user.id] = 'awaiting_broadcast'
         await update.message.reply_text(
@@ -184,6 +266,105 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
     elif text == '❌ Отмена':
         admin_states[user.id] = 'admin_panel'
         await update.message.reply_text("Действие отменено", reply_markup=admin_panel_keyboard())
+    elif text in ['📦 Все заказы', '✅ Готовые заказы', '🔄 Заказы в работе']:
+        await handle_orders_filter(update, context, text)
+
+
+async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает панель управления заказами"""
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        return
+
+    admin_states[user.id] = 'admin_orders'
+    await update.message.reply_text(
+        "📦 Управление заказами\n\nВыберите фильтр для просмотра заказов:",
+        reply_markup=admin_orders_keyboard()
+    )
+
+
+async def handle_orders_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, filter_type: str):
+    """Обрабатывает фильтры заказов"""
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        return
+
+    if filter_type == '📦 Все заказы':
+        orders = db.get_orders("all")
+        await show_orders_list(update, orders, "📦 Все заказы")
+    elif filter_type == '✅ Готовые заказы':
+        orders = db.get_orders(ORDER_STATUSES['ready'])
+        await show_orders_list(update, orders, "✅ Готовые заказы")
+    elif filter_type == '🔄 Заказы в работе':
+        orders = db.get_orders(ORDER_STATUSES['working'])
+        await show_individual_orders(update, orders, "🔄 Заказы в работе")
+    else:
+        return
+
+
+async def show_orders_list(update: Update, orders: list, title: str):
+    """Показывает список заказов одним сообщением"""
+    if not orders:
+        await update.message.reply_text(
+            f"❌ {title.split(' ')[1]} не найдены",
+            reply_markup=admin_orders_keyboard()
+        )
+        return
+
+    orders_text = f"{title} ({len(orders)} шт.):\n\n"
+
+    for i, order in enumerate(orders, 1):
+        orders_text += f"🔹 Заказ #{order['order_id']}\n"
+        orders_text += f"👤 {order['first_name']}"
+        if order['username']:
+            orders_text += f" (@{order['username']})"
+        orders_text += f"\n📚 {order['subject']}\n"
+        orders_text += f"📝 {order['custom_topic'] or order['topic']}\n"
+        orders_text += f"💰 {order['price']} руб. | {order['status']}\n"
+        orders_text += f"⏰ {order['created_at'][:16]}\n"
+
+        if order['admin_comment']:
+            orders_text += f"💬 {order['admin_comment']}\n"
+
+        orders_text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    await update.message.reply_text(orders_text, reply_markup=admin_orders_keyboard())
+
+
+async def show_individual_orders(update: Update, orders: list, title: str):
+    """Показывает каждый заказ отдельным сообщением с кнопками"""
+    if not orders:
+        await update.message.reply_text(
+            f"❌ {title.split(' ')[1]} не найдены",
+            reply_markup=admin_orders_keyboard()
+        )
+        return
+
+    # Сначала отправляем заголовок
+    await update.message.reply_text(f"{title} ({len(orders)} шт.):")
+
+    # Затем отправляем каждый заказ отдельным сообщением
+    for order in orders:
+        order_text = f"""🔹 Заказ #{order['order_id']}
+
+👤 Пользователь:
+├ Имя: {order['first_name']}
+├ ID: {order['user_id']}
+└ @{order['username'] if order['username'] else 'нет'}
+
+📋 Детали заказа:
+├ Предмет: {order['subject']}
+├ Тема: {order['custom_topic'] or order['topic']}
+├ Стоимость: {order['price']} руб.
+├ Статус: {order['status']}
+└ Создан: {order['created_at'][:16]}
+
+💬 Комментарий: {order['admin_comment'] or 'нет'}"""
+
+        await update.message.reply_text(
+            order_text,
+            reply_markup=order_actions_keyboard(order['order_id'])
+        )
 
 
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -344,6 +525,57 @@ async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=admin_panel_keyboard()
             )
 
+    # Обработка кнопок заказов
+    elif callback_data.startswith('order_'):
+        await handle_order_actions(update, context, callback_data)
+
+
+async def handle_order_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str):
+    """Обрабатывает действия с заказами"""
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+    if user.id != ADMIN_ID:
+        return
+
+    try:
+        action, order_id = callback_data.split('_')[1], int(callback_data.split('_')[2])
+
+        if action == 'ready':
+            success = db.update_order_status(order_id, ORDER_STATUSES['ready'])
+            if success:
+                # Уведомляем пользователя
+                orders = db.get_orders("all")
+                target_order = next((o for o in orders if o['order_id'] == order_id), None)
+                if target_order:
+                    await notify_user_order_status(context, target_order['user_id'], order_id, ORDER_STATUSES['ready'])
+
+                # Обновляем сообщение
+                new_text = query.message.text.replace(ORDER_STATUSES['working'], ORDER_STATUSES['ready'])
+                new_text = new_text.replace("🔄 В работе", "✅ Готов")
+
+                await query.edit_message_text(
+                    text=new_text,
+                    reply_markup=order_actions_keyboard(order_id)
+                )
+
+        elif action == 'delete':
+            success = db.delete_order(order_id)
+            if success:
+                await query.edit_message_text(
+                    text=query.message.text + "\n\n🗑️ Заказ удален",
+                    reply_markup=None
+                )
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки действия с заказом: {e}")
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="❌ Ошибка обработки действия",
+            reply_markup=admin_panel_keyboard()
+        )
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -351,6 +583,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     db.save_user(user.id, user.first_name, user.username)
 
+    # Проверяем специальные состояния
     if user.id == ADMIN_ID and admin_states.get(user.id):
         state = admin_states.get(user.id)
 
@@ -358,6 +591,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_admin_broadcast(update, context)
         elif isinstance(state, dict) and state.get('mode') == 'awaiting_reply':
             await handle_admin_reply(update, context)
+        elif isinstance(state, dict) and state.get('mode') == 'order_comment':
+            await handle_order_comment(update, context)
         elif text.startswith('💬 Ответить'):
             try:
                 match = re.search(r'ID: (\d+)\)', text)
@@ -382,6 +617,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_admin_buttons(update, context)
         return
 
+    # Обработка сообщений пользователя
     if text == '📚 Предметы':
         db.save_user_activity(user.id, "menu_click", "Предметы")
         await handle_subjects(update, context)
@@ -402,6 +638,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == '🛒 Корзина':
         db.save_user_activity(user.id, "menu_click", "Корзина")
         await handle_cart(update, context)
+    elif text == '✅ Оформить заказ':
+        db.save_user_activity(user.id, "menu_click", "Оформить заказ")
+        await create_order_from_cart(update, context)
     elif text == '📞 Контакты':
         db.save_user_activity(user.id, "menu_click", "Контакты")
         await send_message_with_notify(update, context,
@@ -432,3 +671,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             db.save_user_activity(user.id, "unknown_message", text)
             await send_message_with_notify(update, context, "Пожалуйста, используй кнопки меню 👆", text)
+
+
+async def handle_order_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает добавление комментария к заказу"""
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        return
+
+    state = admin_states.get(user.id)
+    if isinstance(state, dict) and state.get('mode') == 'order_comment':
+        order_id = state.get('order_id')
+        comment = update.message.text
+
+        if comment == '❌ Отмена':
+            admin_states[user.id] = 'admin_panel'
+            await update.message.reply_text("Добавление комментария отменено", reply_markup=admin_panel_keyboard())
+            return
+
+        success = db.update_order_comment(order_id, comment)
+        if success:
+            admin_states[user.id] = 'admin_panel'
+            await update.message.reply_text(
+                f"✅ Комментарий добавлен к заказу #{order_id}",
+                reply_markup=admin_panel_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка добавления комментария",
+                reply_markup=admin_panel_keyboard()
+            )

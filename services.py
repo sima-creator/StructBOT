@@ -1,9 +1,10 @@
 import logging
+from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import ADMIN_ID, PRICES
+from config import ADMIN_ID, PRICES, ORDER_STATUSES
 from database import db
-from keyboards import quick_reply_inline_keyboard, admin_panel_keyboard, admin_cancel_keyboard
+from keyboards import quick_reply_inline_keyboard, admin_panel_keyboard, admin_cancel_keyboard, order_actions_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,58 @@ async def send_message_to_user(context, target_user_id, reply_text, update):
         return True
     except Exception as e:
         logger.error(f"Ошибка отправки пользователю {target_user_id}: {e}")
+        return False
+
+
+async def notify_user_order_status(context, user_id, order_id, new_status):
+    """Уведомляет пользователя об изменении статуса заказа"""
+    try:
+        user_message = ""
+
+        if new_status == ORDER_STATUSES['ready']:
+            user_message = f"""✅ Ваш заказ готов!
+
+📋 Номер заказа: #{order_id}
+📊 Статус: {new_status}
+
+💬 Свяжитесь с менеджером для получения работы:
+👤 @manager
+
+📞 Мы ждем вашего сообщения!"""
+
+        elif new_status == ORDER_STATUSES['paid']:
+            user_message = f"""💰 Заказ оплачен!
+
+📋 Номер заказа: #{order_id}
+📊 Статус: {new_status}
+
+💬 Спасибо за оплату! Работа выполняется."""
+
+        elif new_status == ORDER_STATUSES['delivered']:
+            user_message = f"""📦 Заказ передан!
+
+📋 Номер заказа: #{order_id}
+📊 Статус: {new_status}
+
+💬 Работа передана вам. Спасибо за заказ!"""
+
+        if user_message:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=user_message
+            )
+
+            db.save_user_activity(
+                user_id=user_id,
+                activity_type="order_status_update",
+                message_text=f"Статус заказа #{order_id} изменен на {new_status}",
+                bot_response=user_message
+            )
+
+            return True
+
+    except Exception as e:
+        logger.error(f"Ошибка уведомления пользователя {user_id} о статусе заказа: {e}")
         return False
 
 

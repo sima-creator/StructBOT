@@ -1,6 +1,6 @@
 import sqlite3
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,23 @@ class Database:
                 topic TEXT,
                 custom_topic TEXT,
                 price INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+
+        # Таблица заказов
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                subject TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                custom_topic TEXT,
+                price INTEGER NOT NULL,
+                status TEXT DEFAULT '🔄 В работе',
+                admin_comment TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id)
@@ -185,6 +202,132 @@ class Database:
         finally:
             conn.close()
 
+    def create_order(self, user_id: int, subject: str, topic: str, custom_topic: str = None, price: int = None) -> int:
+        """Создает новый заказ и возвращает order_id"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                INSERT INTO orders (user_id, subject, topic, custom_topic, price)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_id, subject, topic, custom_topic, price))
+
+            order_id = cursor.lastrowid
+            conn.commit()
+            return order_id
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания заказа для пользователя {user_id}: {e}")
+            conn.rollback()
+            return 0
+        finally:
+            conn.close()
+
+    def get_orders(self, status_filter: str = "all") -> List[Dict[str, Any]]:
+        """Получает заказы с фильтром по статусу"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            if status_filter == "all":
+                cursor.execute('''
+                    SELECT o.*, u.first_name, u.username 
+                    FROM orders o
+                    JOIN users u ON o.user_id = u.user_id
+                    ORDER BY o.created_at ASC
+                ''')
+            else:
+                cursor.execute('''
+                    SELECT o.*, u.first_name, u.username 
+                    FROM orders o
+                    JOIN users u ON o.user_id = u.user_id
+                    WHERE o.status = ?
+                    ORDER BY o.created_at ASC
+                ''', (status_filter,))
+
+            results = cursor.fetchall()
+            orders = []
+
+            for row in results:
+                orders.append({
+                    'order_id': row['order_id'],
+                    'user_id': row['user_id'],
+                    'first_name': row['first_name'],
+                    'username': row['username'],
+                    'subject': row['subject'],
+                    'topic': row['topic'],
+                    'custom_topic': row['custom_topic'],
+                    'price': row['price'],
+                    'status': row['status'],
+                    'admin_comment': row['admin_comment'],
+                    'created_at': row['created_at']
+                })
+
+            return orders
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения заказов: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def update_order_status(self, order_id: int, new_status: str) -> bool:
+        """Обновляет статус заказа"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                UPDATE orders 
+                SET status = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE order_id = ?
+            ''', (new_status, order_id))
+
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления статуса заказа {order_id}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def update_order_comment(self, order_id: int, comment: str) -> bool:
+        """Обновляет комментарий к заказу"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                UPDATE orders 
+                SET admin_comment = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE order_id = ?
+            ''', (comment, order_id))
+
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления комментария заказа {order_id}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def delete_order(self, order_id: int) -> bool:
+        """Удаляет заказ"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('DELETE FROM orders WHERE order_id = ?', (order_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"❌ Ошибка удаления заказа {order_id}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
     def get_active_users(self, hours: int = 24) -> Dict[int, Dict[str, Any]]:
         """Получает активных пользователей"""
         conn = self.get_connection()
@@ -243,7 +386,7 @@ class Database:
             ''')
             active_today = cursor.fetchone()['active_today']
 
-            cursor.execute('SELECT COUNT(*) as current_orders FROM user_selections')
+            cursor.execute('SELECT COUNT(*) as current_orders FROM orders')
             current_orders = cursor.fetchone()['current_orders']
 
             return {

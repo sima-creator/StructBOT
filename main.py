@@ -4,7 +4,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from config import BOT_TOKEN, ADMIN_ID
 from handlers import (
     start, handle_message, handle_inline_buttons,
-    admin_panel, admin_users, admin_stats, admin_reply_command, admin_reply_underscore
+    admin_panel, admin_users, admin_stats, admin_reply_command, admin_reply_underscore,
+    create_order_from_cart
 )
 
 logging.basicConfig(
@@ -36,9 +37,16 @@ def main():
             admin_reply_underscore
         ))
 
-        logger.info("🤖 Бот запущен с SQLite базой данных!")
+        # Обработчик для оформления заказа
+        application.add_handler(MessageHandler(
+            filters.TEXT & filters.Regex(r'^✅ Оформить заказ$'),
+            create_order_from_cart
+        ))
+
+        logger.info("🤖 Бот запущен с системой заказов!")
         print("✅ Бот активен!")
         print("🗃️ База данных: bot_database.db")
+        print("📦 Добавлена система управления заказами")
         print("💾 Все данные сохраняются между перезапусками")
 
         application.run_polling()

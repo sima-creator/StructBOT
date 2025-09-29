@@ -35,7 +35,7 @@ def topics_keyboard(subject):
 
 def admin_panel_keyboard():
     return ReplyKeyboardMarkup([
-        ['👥 Пользователи', '📊 Статистика'],
+        ['👥 Пользователи', '📦 Заказы'],
         ['📢 Общая рассылка', '🚪 Обычный режим']
     ], resize_keyboard=True)
 
@@ -54,6 +54,24 @@ def admin_users_keyboard():
 
     keyboard.append(['↩️ Назад в админ-панель'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def admin_orders_keyboard():
+    """Клавиатура для управления заказами"""
+    return ReplyKeyboardMarkup([
+        ['📦 Все заказы', '✅ Готовые заказы'],
+        ['🔄 Заказы в работе', '↩️ Назад в админ-панель']
+    ], resize_keyboard=True)
+
+
+def order_actions_keyboard(order_id):
+    """Инлайн клавиатура для действий с заказом"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Готов", callback_data=f"order_ready_{order_id}"),
+            InlineKeyboardButton("🗑️ Удалить", callback_data=f"order_delete_{order_id}")
+        ]
+    ])
 
 
 def quick_reply_inline_keyboard(user_id, user_name):

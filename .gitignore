@@ -9,4 +9,4 @@ __pycache__/
 .env
 
 # Настройки IDE
-.idea/
+.idea/bot_database.db
