@@ -222,11 +222,16 @@ async def notify_admin_new_order(context, user, order_id, subject, topic, price)
 💰 Стоимость: {price} руб.
 ⏰ Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
 
-        await context.bot.send_message(
+        # Сохраняем message_id для возможного удаления
+        sent_message = await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=admin_message,
             reply_markup=order_actions_keyboard(order_id)
         )
+
+        # Можно сохранить message_id в context если нужно будет удалять позже
+        # context.bot_data[f'order_{order_id}'] = sent_message.message_id
+
     except Exception as e:
         logger.error(f"Ошибка уведомления админа о новом заказе: {e}")
 
@@ -551,21 +556,27 @@ async def handle_order_actions(update: Update, context: ContextTypes.DEFAULT_TYP
                 if target_order:
                     await notify_user_order_status(context, target_order['user_id'], order_id, ORDER_STATUSES['ready'])
 
-                # Обновляем сообщение
-                new_text = query.message.text.replace(ORDER_STATUSES['working'], ORDER_STATUSES['ready'])
-                new_text = new_text.replace("🔄 В работе", "✅ Готов")
+                # УДАЛЯЕМ сообщение с заказом
+                await query.delete_message()
 
-                await query.edit_message_text(
-                    text=new_text,
-                    reply_markup=order_actions_keyboard(order_id)
+                # Отправляем подтверждение админу
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"✅ Заказ #{order_id} отмечен как готовый и удален из списка",
+                    reply_markup=admin_orders_keyboard()
                 )
 
         elif action == 'delete':
             success = db.delete_order(order_id)
             if success:
-                await query.edit_message_text(
-                    text=query.message.text + "\n\n🗑️ Заказ удален",
-                    reply_markup=None
+                # УДАЛЯЕМ сообщение с заказом
+                await query.delete_message()
+
+                # Отправляем подтверждение админу
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"🗑️ Заказ #{order_id} удален",
+                    reply_markup=admin_orders_keyboard()
                 )
 
     except Exception as e:
