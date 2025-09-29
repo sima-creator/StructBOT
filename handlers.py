@@ -11,7 +11,8 @@ from keyboards import (
     admin_panel_keyboard, admin_cancel_keyboard, admin_users_keyboard,
     admin_orders_keyboard, order_actions_keyboard, quick_reply_inline_keyboard
 )
-from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user, send_message_with_notify, notify_user_order_status
+from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user, \
+    send_message_with_notify, notify_user_order_status
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ async def handle_variant_input(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     variant = update.message.text.strip()
 
+    logger.info(f"Обработка ввода варианта: пользователь {user.id}, вариант '{variant}'")
+
     # Проверяем что вариант состоит из цифр
     if not variant.isdigit():
         await update.message.reply_text(
@@ -68,6 +71,8 @@ async def handle_variant_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Получаем текущий выбор пользователя
     selection = db.get_user_selection(user.id)
+    logger.info(f"Текущий выбор пользователя: {selection}")
+
     if not selection or not selection.get('subject'):
         await update.message.reply_text(
             "❌ Сначала выберите предмет",
@@ -292,7 +297,7 @@ async def handle_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.save_user_activity(user.id, "empty_cart", "Корзина пуста")
 
 
-# АДМИН ПАНЕЛЬ (остается без изменений)
+# АДМИН ПАНЕЛЬ
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != ADMIN_ID:
@@ -778,14 +783,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        "Контакты")
 
     else:
-        # Проверяем, не вводит ли пользователь номер варианта
-        selection = db.get_user_selection(user.id)
-        if selection and selection.get('subject') and not selection.get('variant'):
-            # Если выбран предмет, но не введен вариант - обрабатываем как ввод варианта
-            await handle_variant_input(update, context)
-        else:
-            db.save_user_activity(user.id, "unknown_message", text)
-            await send_message_with_notify(update, context, "Пожалуйста, используй кнопки меню 👆", text)
+        db.save_user_activity(user.id, "unknown_message", text)
+        await send_message_with_notify(update, context, "Пожалуйста, используй кнопки меню 👆", text)
 
 
 async def handle_order_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):

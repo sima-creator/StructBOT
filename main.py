@@ -5,8 +5,7 @@ from config import BOT_TOKEN, ADMIN_ID
 from handlers import (
     start, handle_message, handle_inline_buttons,
     admin_panel, admin_users, admin_stats, admin_reply_command, admin_reply_underscore,
-    create_order_from_cart, handle_variant_input, handle_package_selection,
-    handle_consultation, handle_cart, clear_chat
+    create_order_from_cart, handle_variant_input, handle_consultation, handle_cart, clear_chat
 )
 
 logging.basicConfig(
@@ -18,6 +17,12 @@ logger = logging.getLogger(__name__)
 def main():
     try:
         application = Application.builder().token(BOT_TOKEN).build()
+
+        # ОБЯЗАТЕЛЬНО: Обработчик для ввода варианта ДОЛЖЕН БЫТЬ ПЕРВЫМ
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.Regex(r'^\d+$'),
+            handle_variant_input
+        ))
 
         # Обработчики для пользователей
         application.add_handler(CommandHandler("start", start))
