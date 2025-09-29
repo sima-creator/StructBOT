@@ -45,13 +45,13 @@ class Database:
             )
         ''')
 
-        # Таблица выборов пользователей
+        # Таблица выборов пользователей (обновленная)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_selections (
                 user_id INTEGER PRIMARY KEY,
                 subject TEXT,
-                topic TEXT,
-                custom_topic TEXT,
+                variant TEXT,
+                package TEXT,
                 price INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -59,14 +59,14 @@ class Database:
             )
         ''')
 
-        # Таблица заказов
+        # Таблица заказов (обновленная - добавляем variant и package)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 order_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 subject TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                custom_topic TEXT,
+                variant TEXT NOT NULL,
+                package TEXT NOT NULL,
                 price INTEGER NOT NULL,
                 status TEXT DEFAULT '🔄 В работе',
                 admin_comment TEXT,
@@ -78,7 +78,7 @@ class Database:
 
         conn.commit()
         conn.close()
-        logger.info("✅ База данных инициализирована")
+        logger.info("✅ База данных инициализирована с обновленной структурой")
 
     def save_user(self, user_id: int, first_name: str, username: str = None):
         """Сохраняет или обновляет пользователя"""
@@ -119,9 +119,9 @@ class Database:
         finally:
             conn.close()
 
-    def save_user_selection(self, user_id: int, subject: str = None, topic: str = None, custom_topic: str = None,
-                            price: int = None):
-        """Сохраняет выбор пользователя"""
+    def save_user_selection(self, user_id: int, subject: str = None, variant: str = None,
+                            package: str = None, price: int = None):
+        """Сохраняет выбор пользователя (обновленная версия)"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -136,12 +136,12 @@ class Database:
                 if subject is not None:
                     update_fields.append("subject = ?")
                     params.append(subject)
-                if topic is not None:
-                    update_fields.append("topic = ?")
-                    params.append(topic)
-                if custom_topic is not None:
-                    update_fields.append("custom_topic = ?")
-                    params.append(custom_topic)
+                if variant is not None:
+                    update_fields.append("variant = ?")
+                    params.append(variant)
+                if package is not None:
+                    update_fields.append("package = ?")
+                    params.append(package)
                 if price is not None:
                     update_fields.append("price = ?")
                     params.append(price)
@@ -153,9 +153,9 @@ class Database:
                 cursor.execute(query, params)
             else:
                 cursor.execute('''
-                    INSERT INTO user_selections (user_id, subject, topic, custom_topic, price)
+                    INSERT INTO user_selections (user_id, subject, variant, package, price)
                     VALUES (?, ?, ?, ?, ?)
-                ''', (user_id, subject, topic, custom_topic, price))
+                ''', (user_id, subject, variant, package, price))
 
             conn.commit()
         except Exception as e:
@@ -171,7 +171,7 @@ class Database:
 
         try:
             cursor.execute('''
-                SELECT subject, topic, custom_topic, price 
+                SELECT subject, variant, package, price 
                 FROM user_selections 
                 WHERE user_id = ?
             ''', (user_id,))
@@ -180,8 +180,8 @@ class Database:
             if result:
                 return {
                     'subject': result['subject'],
-                    'topic': result['topic'],
-                    'custom_topic': result['custom_topic'],
+                    'variant': result['variant'],
+                    'package': result['package'],
                     'price': result['price']
                 }
             return None
@@ -202,16 +202,16 @@ class Database:
         finally:
             conn.close()
 
-    def create_order(self, user_id: int, subject: str, topic: str, custom_topic: str = None, price: int = None) -> int:
-        """Создает новый заказ и возвращает order_id"""
+    def create_order(self, user_id: int, subject: str, variant: str, package: str, price: int) -> int:
+        """Создает новый заказ (обновленная версия)"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
         try:
             cursor.execute('''
-                INSERT INTO orders (user_id, subject, topic, custom_topic, price)
+                INSERT INTO orders (user_id, subject, variant, package, price)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, subject, topic, custom_topic, price))
+            ''', (user_id, subject, variant, package, price))
 
             order_id = cursor.lastrowid
             conn.commit()
@@ -255,8 +255,8 @@ class Database:
                     'first_name': row['first_name'],
                     'username': row['username'],
                     'subject': row['subject'],
-                    'topic': row['topic'],
-                    'custom_topic': row['custom_topic'],
+                    'variant': row['variant'],
+                    'package': row['package'],
                     'price': row['price'],
                     'status': row['status'],
                     'admin_comment': row['admin_comment'],

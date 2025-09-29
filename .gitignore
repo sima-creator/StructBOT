@@ -10,3 +10,12 @@ __pycache__/
 
 # Настройки IDE
 .idea/bot_database.db
+bot_database.db
+*.db
+*.sqlite
+*.db-journal
+.idea/
+__pycache__/
+*.pyc
+.env
+venv/

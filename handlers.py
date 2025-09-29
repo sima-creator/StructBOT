@@ -3,15 +3,15 @@ import re
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler
-from config import ADMIN_ID, SUBJECTS_TOPICS, PRICES, admin_states, ORDER_STATUSES
+from config import ADMIN_ID, SUBJECTS, SUBJECT_PRICES, SERVICE_PACKAGES, admin_states, ORDER_STATUSES
 from database import db
 from keyboards import (
-    main_keyboard, subjects_keyboard, topics_keyboard,
+    main_keyboard, subjects_keyboard, subject_selected_keyboard,
+    service_packages_keyboard, consultation_keyboard, cart_keyboard,
     admin_panel_keyboard, admin_cancel_keyboard, admin_users_keyboard,
     admin_orders_keyboard, order_actions_keyboard, quick_reply_inline_keyboard
 )
-from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user, \
-    send_message_with_notify, notify_user_order_status
+from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user, send_message_with_notify, notify_user_order_status
 
 logger = logging.getLogger(__name__)
 
@@ -40,130 +40,158 @@ async def handle_subjects(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_subject_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, subject: str):
     user = update.effective_user
 
-    db.save_user_selection(user.id, subject=subject)
+    # Сохраняем только предмет, очищаем предыдущие выборы
+    db.save_user_selection(user.id, subject=subject, variant=None, package=None, price=None)
     db.save_user_activity(user.id, "subject_selection", f"Выбрал предмет: {subject}")
 
-    text = f"""🎯 Выбран предмет: {subject}
+    text = f"""🎯 Выбран: {subject}
 
-📝 Доступные темы:
+💡 У каждого предмета есть свои варианты заданий.
 
-Выбери подходящую тему или укажи свою:"""
+Нажмите "Ввести вариант" чтобы продолжить:"""
 
-    await update.message.reply_text(text, reply_markup=topics_keyboard(subject))
+    await update.message.reply_text(text, reply_markup=subject_selected_keyboard())
 
 
-async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, topic: str):
+async def handle_variant_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает ввод номера варианта"""
     user = update.effective_user
+    variant = update.message.text.strip()
 
-    selection = db.get_user_selection(user.id)
-    if selection and selection.get('subject'):
-        subject = selection['subject']
-
-        if topic == "Другая тема (уточнить)":
-            db.save_user_selection(user.id, topic=topic)
-            db.save_user_activity(user.id, "custom_topic_selected", f"Выбрал свою тему для {subject}")
-
-            text = f"""✏️ Выбрана своя тема
-
-Предмет: {subject}
-
-Напиши свою тему курсовой работы:"""
-            await send_message_with_notify(update, context, text, f"Своя тема для {subject}")
-        else:
-            db.save_user_selection(
-                user.id,
-                topic=topic,
-                price=PRICES['standard']
-            )
-            db.save_user_activity(user.id, "topic_selection", f"Выбрал тему: {topic} для {subject}")
-
-            text = f"""✅ Тема выбрана!
-
-📚 Предмет: {subject}
-📝 Тема: {topic}
-
-💰 Стоимость: {PRICES['standard']} руб.
-⏰ Срок выполнения: 7 дней
-
-🛒 Для оформления заказа нажми '🛒 Корзина'"""
-
-            await update.message.reply_text(text, reply_markup=main_keyboard())
-            await notify_admin(context.application, user, text, f"Тема: {topic} для {subject}")
-
-
-async def handle_custom_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    custom_topic = update.message.text
-
-    selection = db.get_user_selection(user.id)
-    if selection and selection.get('subject'):
-        subject = selection['subject']
-
-        db.save_user_selection(
-            user.id,
-            custom_topic=custom_topic,
-            price=PRICES['custom_topic']
-        )
-        db.save_user_activity(user.id, "custom_topic_entered", f"Ввел свою тему: {custom_topic} для {subject}")
-
-        text = f"""✅ Ваша тема принята!
-
-📚 Предмет: {subject}
-📝 Тема: {custom_topic}
-
-💰 Стоимость: {PRICES['custom_topic']} руб. (индивидуальная тема)
-⏰ Срок выполнения: 10 дней
-
-🛒 Для оформления заказа нажми '🛒 Корзина'"""
-
-        await update.message.reply_text(text, reply_markup=main_keyboard())
-        await notify_admin(context.application, user, text, f"Своя тема: {custom_topic} для {subject}")
-    else:
-        await send_message_with_notify(update, context, "Сначала выбери предмет 👆")
-
-
-async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    db.delete_user_selection(user.id)
-    db.save_user_activity(user.id, "clear_chat", "Очистил чат")
-
-    await send_message_with_notify(update, context, "🧹 Чат полностью очищен!\n\nВсе выборы сброшены.", "Очистка чата")
-
-
-async def handle_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    selection = db.get_user_selection(user.id)
-
-    if selection and (selection.get('topic') or selection.get('custom_topic')):
-        subject = selection.get('subject', 'Не выбран')
-        topic = selection.get('custom_topic') or selection.get('topic', 'Не выбрана')
-        price = selection.get('price', 0)
-
-        cart_text = f"""🛒 Твой заказ:
-
-📚 Предмет: {subject}
-📝 Тема: {topic}
-💰 Стоимость: {price} руб.
-
-💳 Для оформления заказа нажмите кнопку ниже👇"""
-
-        keyboard = [
-            ['✅ Оформить заказ'],
-            ['↩️ Назад в меню']
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-        await update.message.reply_text(cart_text, reply_markup=reply_markup)
-        db.save_user_activity(user.id, "cart_view", "Просмотр корзины")
-
-    else:
+    # Проверяем что вариант состоит из цифр
+    if not variant.isdigit():
         await update.message.reply_text(
-            "🛒 Корзина пуста. Сначала выбери тему работы!",
+            "❌ Пожалуйста, введите только номер варианта (цифры).\n\nПример: 27",
+            reply_markup=subject_selected_keyboard()
+        )
+        return
+
+    # Получаем текущий выбор пользователя
+    selection = db.get_user_selection(user.id)
+    if not selection or not selection.get('subject'):
+        await update.message.reply_text(
+            "❌ Сначала выберите предмет",
+            reply_markup=subjects_keyboard()
+        )
+        return
+
+    subject = selection['subject']
+
+    # Сохраняем вариант
+    db.save_user_selection(user.id, variant=variant)
+    db.save_user_activity(user.id, "variant_entered", f"Ввел вариант: {variant} для {subject}")
+
+    # Показываем тарифы
+    await show_service_packages(update, context, subject, variant)
+
+
+async def show_service_packages(update: Update, context: ContextTypes.DEFAULT_TYPE, subject: str, variant: str):
+    """Показывает тарифы для выбранного предмета и варианта"""
+    text = f"""🎯 Вариант {variant} - {subject}
+
+Выберите тариф выполнения:"""
+
+    # Получаем цены для выбранного предмета
+    prices = SUBJECT_PRICES.get(subject, {})
+
+    # Формируем описание каждого тарифа с ценами
+    for package_key, package_info in SERVICE_PACKAGES.items():
+        price = prices.get(package_key, 0)
+        text += f"\n\n{package_info['name']}\n{package_info['description']}\n💰 {price} руб."
+
+    text += "\n\n💬 Или закажите консультацию для обсуждения деталей"
+
+    await update.message.reply_text(text, reply_markup=service_packages_keyboard())
+
+
+async def handle_package_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, package_key: str):
+    """Обрабатывает выбор тарифа"""
+    user = update.effective_user
+
+    # Получаем текущий выбор пользователя
+    selection = db.get_user_selection(user.id)
+    if not selection or not selection.get('subject') or not selection.get('variant'):
+        await update.message.reply_text(
+            "❌ Сначала выберите предмет и введите вариант",
+            reply_markup=subjects_keyboard()
+        )
+        return
+
+    subject = selection['subject']
+    variant = selection['variant']
+
+    # Получаем цену для выбранного тарифа
+    prices = SUBJECT_PRICES.get(subject, {})
+    price = prices.get(package_key, 0)
+
+    if price == 0:
+        await update.message.reply_text(
+            "❌ Ошибка определения цены. Пожалуйста, начните заново.",
             reply_markup=main_keyboard()
         )
-        db.save_user_activity(user.id, "empty_cart", "Корзина пуста")
+        return
+
+    # Сохраняем выбранный тариф и цену
+    db.save_user_selection(user.id, package=package_key, price=price)
+    db.save_user_activity(user.id, "package_selected",
+                          f"Выбрал тариф {package_key} за {price} руб. для {subject} варианта {variant}")
+
+    # Показываем корзину
+    await show_cart(update, context)
+
+
+async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает корзину с выбранными опциями"""
+    user = update.effective_user
+    selection = db.get_user_selection(user.id)
+
+    if not selection or not selection.get('subject') or not selection.get('variant') or not selection.get('package'):
+        await update.message.reply_text(
+            "❌ Не все параметры выбраны. Начните заново.",
+            reply_markup=main_keyboard()
+        )
+        return
+
+    subject = selection['subject']
+    variant = selection['variant']
+    package_key = selection['package']
+    price = selection['price']
+
+    package_info = SERVICE_PACKAGES.get(package_key, {})
+    package_name = package_info.get('name', 'Неизвестный тариф')
+
+    cart_text = f"""🛒 Ваш заказ:
+
+📚 Предмет: {subject}
+🔢 Вариант: {variant}
+📦 Тариф: {package_name}
+💰 Стоимость: {price} руб.
+
+Для оформления заказа нажмите кнопку ниже👇"""
+
+    await update.message.reply_text(cart_text, reply_markup=cart_keyboard())
+    db.save_user_activity(user.id, "cart_view", "Просмотр корзины")
+
+
+async def handle_consultation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает запрос консультации"""
+    user = update.effective_user
+
+    selection = db.get_user_selection(user.id)
+    subject = selection.get('subject', 'Не выбран') if selection else 'Не выбран'
+    variant = selection.get('variant', 'Не указан') if selection else 'Не указан'
+
+    text = f"""📞 Консультация
+
+Для консультации по предмету {subject} (вариант {variant}) свяжитесь с нашим менеджером:
+
+👤 @manager
+📧 info@example.com
+
+Мы ответим на все ваши вопросы и поможем определиться с выбором!"""
+
+    await update.message.reply_text(text, reply_markup=consultation_keyboard())
+    db.save_user_activity(user.id, "consultation_request", "Запрошена консультация")
 
 
 async def create_order_from_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,20 +199,24 @@ async def create_order_from_cart(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     selection = db.get_user_selection(user.id)
 
-    if not selection or not (selection.get('topic') or selection.get('custom_topic')):
-        await update.message.reply_text("❌ Нет данных для создания заказа", reply_markup=main_keyboard())
+    if not selection or not selection.get('subject') or not selection.get('variant') or not selection.get('package'):
+        await update.message.reply_text("❌ Не все параметры выбраны", reply_markup=main_keyboard())
         return
 
-    subject = selection.get('subject', 'Не выбран')
-    topic = selection.get('custom_topic') or selection.get('topic', 'Не выбрана')
-    price = selection.get('price', 0)
+    subject = selection['subject']
+    variant = selection['variant']
+    package_key = selection['package']
+    price = selection['price']
+
+    package_info = SERVICE_PACKAGES.get(package_key, {})
+    package_name = package_info.get('name', 'Неизвестный тариф')
 
     # Создаем заказ в базе данных
-    order_id = db.create_order(user.id, subject, topic, selection.get('custom_topic'), price)
+    order_id = db.create_order(user.id, subject, variant, package_name, price)
 
     if order_id:
         # Уведомляем админа о новом заказе
-        await notify_admin_new_order(context, user, order_id, subject, topic, price)
+        await notify_admin_new_order(context, user, order_id, subject, variant, package_name, price)
 
         # Очищаем корзину пользователя
         db.delete_user_selection(user.id)
@@ -193,7 +225,8 @@ async def create_order_from_cart(update: Update, context: ContextTypes.DEFAULT_T
 
 📋 Номер заказа: #{order_id}
 📚 Предмет: {subject}
-📝 Тема: {topic}
+🔢 Вариант: {variant}
+📦 Тариф: {package_name}
 💰 Стоимость: {price} руб.
 📞 Статус: {ORDER_STATUSES['working']}
 
@@ -206,7 +239,7 @@ async def create_order_from_cart(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ Ошибка при создании заказа", reply_markup=main_keyboard())
 
 
-async def notify_admin_new_order(context, user, order_id, subject, topic, price):
+async def notify_admin_new_order(context, user, order_id, subject, variant, package, price):
     """Уведомляет админа о новом заказе"""
     try:
         admin_message = f"""🆕 НОВЫЙ ЗАКАЗ #{order_id}
@@ -218,24 +251,48 @@ async def notify_admin_new_order(context, user, order_id, subject, topic, price)
 
 📋 Детали заказа:
 📚 Предмет: {subject}
-📝 Тема: {topic}
+🔢 Вариант: {variant}
+📦 Тариф: {package}
 💰 Стоимость: {price} руб.
 ⏰ Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
 
-        # Сохраняем message_id для возможного удаления
-        sent_message = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=admin_message,
             reply_markup=order_actions_keyboard(order_id)
         )
-
-        # Можно сохранить message_id в context если нужно будет удалять позже
-        # context.bot_data[f'order_{order_id}'] = sent_message.message_id
-
     except Exception as e:
         logger.error(f"Ошибка уведомления админа о новом заказе: {e}")
 
 
+async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    db.delete_user_selection(user.id)
+    db.save_user_activity(user.id, "clear_chat", "Очистил чат")
+
+    await update.message.reply_text(
+        "🧹 Чат полностью очищен!\n\nВсе выборы сброшены.",
+        reply_markup=main_keyboard()
+    )
+
+
+async def handle_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает корзину по запросу пользователя"""
+    user = update.effective_user
+    selection = db.get_user_selection(user.id)
+
+    if selection and selection.get('subject') and selection.get('variant') and selection.get('package'):
+        await show_cart(update, context)
+    else:
+        await update.message.reply_text(
+            "🛒 Корзина пуста. Сначала выберите предмет, вариант и тариф!",
+            reply_markup=main_keyboard()
+        )
+        db.save_user_activity(user.id, "empty_cart", "Корзина пуста")
+
+
+# АДМИН ПАНЕЛЬ (остается без изменений)
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != ADMIN_ID:
@@ -276,7 +333,6 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает панель управления заказами"""
     user = update.effective_user
     if user.id != ADMIN_ID:
         return
@@ -289,7 +345,6 @@ async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_orders_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, filter_type: str):
-    """Обрабатывает фильтры заказов"""
     user = update.effective_user
     if user.id != ADMIN_ID:
         return
@@ -308,7 +363,6 @@ async def handle_orders_filter(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def show_orders_list(update: Update, orders: list, title: str):
-    """Показывает список заказов одним сообщением"""
     if not orders:
         await update.message.reply_text(
             f"❌ {title.split(' ')[1]} не найдены",
@@ -324,7 +378,8 @@ async def show_orders_list(update: Update, orders: list, title: str):
         if order['username']:
             orders_text += f" (@{order['username']})"
         orders_text += f"\n📚 {order['subject']}\n"
-        orders_text += f"📝 {order['custom_topic'] or order['topic']}\n"
+        orders_text += f"🔢 Вариант: {order['variant']}\n"
+        orders_text += f"📦 Тариф: {order['package']}\n"
         orders_text += f"💰 {order['price']} руб. | {order['status']}\n"
         orders_text += f"⏰ {order['created_at'][:16]}\n"
 
@@ -337,7 +392,6 @@ async def show_orders_list(update: Update, orders: list, title: str):
 
 
 async def show_individual_orders(update: Update, orders: list, title: str):
-    """Показывает каждый заказ отдельным сообщением с кнопками"""
     if not orders:
         await update.message.reply_text(
             f"❌ {title.split(' ')[1]} не найдены",
@@ -345,10 +399,8 @@ async def show_individual_orders(update: Update, orders: list, title: str):
         )
         return
 
-    # Сначала отправляем заголовок
     await update.message.reply_text(f"{title} ({len(orders)} шт.):")
 
-    # Затем отправляем каждый заказ отдельным сообщением
     for order in orders:
         order_text = f"""🔹 Заказ #{order['order_id']}
 
@@ -359,7 +411,8 @@ async def show_individual_orders(update: Update, orders: list, title: str):
 
 📋 Детали заказа:
 ├ Предмет: {order['subject']}
-├ Тема: {order['custom_topic'] or order['topic']}
+├ Вариант: {order['variant']}
+├ Тариф: {order['package']}
 ├ Стоимость: {order['price']} руб.
 ├ Статус: {order['status']}
 └ Создан: {order['created_at'][:16]}
@@ -530,7 +583,6 @@ async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=admin_panel_keyboard()
             )
 
-    # Обработка кнопок заказов
     elif callback_data.startswith('order_'):
         await handle_order_actions(update, context, callback_data)
 
@@ -556,7 +608,7 @@ async def handle_order_actions(update: Update, context: ContextTypes.DEFAULT_TYP
                 if target_order:
                     await notify_user_order_status(context, target_order['user_id'], order_id, ORDER_STATUSES['ready'])
 
-                # УДАЛЯЕМ сообщение с заказом
+                # Удаляем сообщение с заказом
                 await query.delete_message()
 
                 # Отправляем подтверждение админу
@@ -569,7 +621,7 @@ async def handle_order_actions(update: Update, context: ContextTypes.DEFAULT_TYP
         elif action == 'delete':
             success = db.delete_order(order_id)
             if success:
-                # УДАЛЯЕМ сообщение с заказом
+                # Удаляем сообщение с заказом
                 await query.delete_message()
 
                 # Отправляем подтверждение админу
@@ -594,7 +646,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     db.save_user(user.id, user.first_name, user.username)
 
-    # Проверяем специальные состояния
+    # Проверяем специальные состояния админа
     if user.id == ADMIN_ID and admin_states.get(user.id):
         state = admin_states.get(user.id)
 
@@ -632,53 +684,105 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == '📚 Предметы':
         db.save_user_activity(user.id, "menu_click", "Предметы")
         await handle_subjects(update, context)
+
+    elif text == '✏️ Ввести вариант':
+        db.save_user_activity(user.id, "menu_click", "Ввести вариант")
+        await update.message.reply_text(
+            "✏️ Введите номер вашего варианта:\n\nНапример: 27, 15, 8 и т.д.\n\n(просто отправьте номер в чат)",
+            reply_markup=subject_selected_keyboard()
+        )
+
+    elif text in ['🏗️ БАЗОВЫЙ', '📊 СТАНДАРТ', '💎 ИНДИВИДУАЛЬНЫЙ']:
+        db.save_user_activity(user.id, "menu_click", f"Выбор тарифа: {text}")
+        package_map = {
+            '🏗️ БАЗОВЫЙ': 'basic',
+            '📊 СТАНДАРТ': 'standard',
+            '💎 ИНДИВИДУАЛЬНЫЙ': 'individual'
+        }
+        package_key = package_map.get(text)
+        if package_key:
+            await handle_package_selection(update, context, package_key)
+
+    elif text == '📞 Заказать консультацию':
+        db.save_user_activity(user.id, "menu_click", "Заказать консультацию")
+        await handle_consultation(update, context)
+
+    elif text == '📞 Связаться с менеджером':
+        db.save_user_activity(user.id, "menu_click", "Связаться с менеджером")
+        await update.message.reply_text(
+            "👤 Наш менеджер: @manager\n\n💬 Напишите ему прямо сейчас для консультации!",
+            reply_markup=consultation_keyboard()
+        )
+
+    elif text == '🛒 Корзина':
+        db.save_user_activity(user.id, "menu_click", "Корзина")
+        await handle_cart(update, context)
+
+    elif text == '✅ Оформить заказ':
+        db.save_user_activity(user.id, "menu_click", "Оформить заказ")
+        await create_order_from_cart(update, context)
+
+    elif text in SUBJECTS:
+        db.save_user_activity(user.id, "subject_selected", text)
+        await handle_subject_selection(update, context, text)
+
+    elif text in ['↩️ Назад в меню', '🏠 В главное меню']:
+        db.save_user_activity(user.id, "menu_click", "Главное меню")
+        await start(update, context)
+
+    elif text == '↩️ К выбору предмета':
+        db.save_user_activity(user.id, "menu_click", "К выбору предмета")
+        await handle_subjects(update, context)
+
+    elif text == '↩️ Назад к тарифам':
+        db.save_user_activity(user.id, "menu_click", "Назад к тарифам")
+        selection = db.get_user_selection(user.id)
+        if selection and selection.get('subject') and selection.get('variant'):
+            await show_service_packages(update, context, selection['subject'], selection['variant'])
+        else:
+            await handle_subjects(update, context)
+
+    elif text == '↩️ Назад':
+        db.save_user_activity(user.id, "menu_click", "Назад")
+        selection = db.get_user_selection(user.id)
+        if selection and selection.get('subject'):
+            await handle_subject_selection(update, context, selection['subject'])
+        else:
+            await handle_subjects(update, context)
+
+    elif text == '🧹 Очистить чат':
+        db.save_user_activity(user.id, "menu_click", "Очистить чат")
+        await clear_chat(update, context)
+
     elif text == 'ℹ️ Гарантии':
         db.save_user_activity(user.id, "menu_click", "Гарантии")
         await send_message_with_notify(update, context,
                                        "ℹ️ Наши гарантии:\n\n✅ Качество работ\n✅ Соблюдение сроков\n✅ Конфиденциальность",
                                        "Гарантии")
+
     elif text == '💰 Цены':
         db.save_user_activity(user.id, "menu_click", "Цены")
         await send_message_with_notify(update, context,
-                                       "💰 Наши цены:\n\n📝 Курсовая: от 2000 руб.\n⚡ Срочный заказ: +50%\n📚 Сложный предмет: +30%",
+                                       "💰 Наши цены:\n\n📝 Курсовая: от 2500 руб.\n📊 Стандарт: от 4500 руб.\n💎 Индивидуальный: от 6500 руб.",
                                        "Цены")
+
     elif text == '👨‍🎓 О нас':
         db.save_user_activity(user.id, "menu_click", "О нас")
         await send_message_with_notify(update, context,
                                        "👨‍🎓 Профессиональная команда авторов с опытом работы более 5 лет!", "О нас")
-    elif text == '🛒 Корзина':
-        db.save_user_activity(user.id, "menu_click", "Корзина")
-        await handle_cart(update, context)
-    elif text == '✅ Оформить заказ':
-        db.save_user_activity(user.id, "menu_click", "Оформить заказ")
-        await create_order_from_cart(update, context)
+
     elif text == '📞 Контакты':
         db.save_user_activity(user.id, "menu_click", "Контакты")
         await send_message_with_notify(update, context,
                                        "📞 Наши контакты:\n\n👤 Менеджер: @manager\n📧 Email: info@example.com",
                                        "Контакты")
-    elif text == '🧹 Очистить чат':
-        db.save_user_activity(user.id, "menu_click", "Очистить чат")
-        await clear_chat(update, context)
-    elif text in SUBJECTS_TOPICS.keys():
-        db.save_user_activity(user.id, "subject_selected", text)
-        await handle_subject_selection(update, context, text)
-    elif text == '↩️ Назад в меню':
-        db.save_user_activity(user.id, "menu_click", "Назад в меню")
-        await start(update, context)
-    elif text == '↩️ К выбору предмета':
-        db.save_user_activity(user.id, "menu_click", "К выбору предмета")
-        await handle_subjects(update, context)
-    elif text == '🏠 В главное меню':
-        db.save_user_activity(user.id, "menu_click", "В главное меню")
-        await start(update, context)
-    elif any(text in topics for topics in SUBJECTS_TOPICS.values()):
-        db.save_user_activity(user.id, "topic_selected", text)
-        await handle_topic_selection(update, context, text)
+
     else:
+        # Проверяем, не вводит ли пользователь номер варианта
         selection = db.get_user_selection(user.id)
-        if selection and selection.get('topic') == "Другая тема (уточнить)":
-            await handle_custom_topic(update, context)
+        if selection and selection.get('subject') and not selection.get('variant'):
+            # Если выбран предмет, но не введен вариант - обрабатываем как ввод варианта
+            await handle_variant_input(update, context)
         else:
             db.save_user_activity(user.id, "unknown_message", text)
             await send_message_with_notify(update, context, "Пожалуйста, используй кнопки меню 👆", text)

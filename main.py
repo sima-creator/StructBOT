@@ -5,7 +5,8 @@ from config import BOT_TOKEN, ADMIN_ID
 from handlers import (
     start, handle_message, handle_inline_buttons,
     admin_panel, admin_users, admin_stats, admin_reply_command, admin_reply_underscore,
-    create_order_from_cart
+    create_order_from_cart, handle_variant_input, handle_package_selection,
+    handle_consultation, handle_cart, clear_chat
 )
 
 logging.basicConfig(
@@ -43,10 +44,11 @@ def main():
             create_order_from_cart
         ))
 
-        logger.info("🤖 Бот запущен с системой заказов!")
+        logger.info("🤖 Бот запущен с новой системой заказов!")
         print("✅ Бот активен!")
         print("🗃️ База данных: bot_database.db")
-        print("📦 Добавлена система управления заказами")
+        print("📦 Новая система: Предмет → Вариант → Тариф")
+        print("💰 Индивидуальные цены для каждого предмета")
         print("💾 Все данные сохраняются между перезапусками")
 
         application.run_polling()

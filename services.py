@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import ADMIN_ID, PRICES, ORDER_STATUSES
+from config import ADMIN_ID, SUBJECT_PRICES, ORDER_STATUSES
 from database import db
 from keyboards import quick_reply_inline_keyboard, admin_panel_keyboard, admin_cancel_keyboard, order_actions_keyboard
 

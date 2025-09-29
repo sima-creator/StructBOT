@@ -12,25 +12,49 @@ def main_keyboard():
 
 
 def subjects_keyboard():
-    keyboard = [
-        ['🏠 Архитектура', '🏗️ ТСП'],
-        ['🌡️ ТГВ', '🚰 ВиВ'],
-        ['↩️ Назад в меню']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-
-def topics_keyboard(subject):
-    from config import SUBJECTS_TOPICS
-    topics = SUBJECTS_TOPICS.get(subject, [])
+    from config import SUBJECTS
     keyboard = []
 
-    for i in range(0, len(topics), 2):
-        row = topics[i:i + 2]
+    # Разбиваем предметы по 2 в ряд
+    for i in range(0, len(SUBJECTS), 2):
+        row = SUBJECTS[i:i + 2]
         keyboard.append(row)
 
-    keyboard.append(['↩️ К выбору предмета', '🏠 В главное меню'])
+    keyboard.append(['↩️ Назад в меню'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def subject_selected_keyboard():
+    """Клавиатура после выбора предмета"""
+    return ReplyKeyboardMarkup([
+        ['✏️ Ввести вариант'],
+        ['↩️ К выбору предмета', '🏠 В главное меню']
+    ], resize_keyboard=True)
+
+
+def service_packages_keyboard():
+    """Клавиатура с тарифами"""
+    return ReplyKeyboardMarkup([
+        ['🏗️ БАЗОВЫЙ', '📊 СТАНДАРТ'],
+        ['💎 ИНДИВИДУАЛЬНЫЙ', '📞 Заказать консультацию'],
+        ['↩️ Назад']
+    ], resize_keyboard=True)
+
+
+def consultation_keyboard():
+    """Клавиатура для консультации"""
+    return ReplyKeyboardMarkup([
+        ['📞 Связаться с менеджером'],
+        ['↩️ Назад к тарифам']
+    ], resize_keyboard=True)
+
+
+def cart_keyboard():
+    """Клавиатура для корзины"""
+    return ReplyKeyboardMarkup([
+        ['✅ Оформить заказ'],
+        ['↩️ Назад в меню']
+    ], resize_keyboard=True)
 
 
 def admin_panel_keyboard():
