@@ -1,7 +1,7 @@
 import logging
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ADMIN_ID
 from handlers import (
     start, handle_message, handle_inline_buttons,
     admin_panel, admin_users, admin_stats, admin_reply_command, admin_reply_underscore
@@ -32,14 +32,14 @@ def main():
 
         # Обработчик для команд с подчеркиванием
         application.add_handler(MessageHandler(
-            filters.TEXT & filters.User(user_id=7251427348) & filters.Regex(r'^/reply_\d+'),
+            filters.TEXT & filters.User(ADMIN_ID) & filters.Regex(r'^/reply_\d+'),
             admin_reply_underscore
         ))
 
-        logger.info("🤖 Бот запущен с новой структурой!")
+        logger.info("🤖 Бот запущен с SQLite базой данных!")
         print("✅ Бот активен!")
-        print("🔧 Структура: config.py, handlers.py, keyboards.py, services.py")
-        print("💡 Все функции работают как и раньше!")
+        print("🗃️ База данных: bot_database.db")
+        print("💾 Все данные сохраняются между перезапусками")
 
         application.run_polling()
 

@@ -1,50 +1,29 @@
 import logging
 import re
 from telegram import Update
-from telegram.ext import ContextTypes
-from config import ADMIN_ID, user_selections, active_users, admin_states, SUBJECTS_TOPICS
+from telegram.ext import ContextTypes, CallbackQueryHandler
+from config import ADMIN_ID, SUBJECTS_TOPICS, PRICES, admin_states
+from database import db
 from keyboards import (
     main_keyboard, subjects_keyboard, topics_keyboard,
     admin_panel_keyboard, admin_cancel_keyboard, admin_users_keyboard
 )
-from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user
+from services import notify_admin, handle_admin_broadcast, handle_admin_reply, send_message_to_user, \
+    send_message_with_notify
 
 logger = logging.getLogger(__name__)
 
 
-async def send_message_with_notify(update, context, text, user_message=None):
-    """Отправляет сообщение пользователю и уведомляет админа"""
-    user = update.effective_user
-
-    # Определяем правильную клавиатуру
-    if user.id == ADMIN_ID and admin_states.get(user.id) == 'admin_panel':
-        reply_markup = admin_panel_keyboard()
-    else:
-        reply_markup = main_keyboard()
-
-    # Отправляем сообщение пользователю
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-    # Уведомляем админа (БЕЗ Markdown) - кроме самого админа
-    if user.id != ADMIN_ID:
-        await notify_admin(context.application, user, text, user_message)
-
-
-# ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"Пользователь {user.id} запустил бота")
 
-    if user.id in user_selections:
-        del user_selections[user.id]
+    db.save_user(user.id, user.first_name, user.username)
+    db.save_user_activity(user.id, "start", "/start")
 
     welcome_text = f"""Привет, {user.first_name}! 👋
 
 Мы — команда экспертов с огромным опытом в сфере строительных дисциплин. Наша специализация — выполнение курсовых работ высочайшего качества с полным сопровождением на всех этапах.
-
-Важным преимуществом нашего сервиса является персональный эксперт, который закрепляется за вами при выборе соответствующего тарифа. Ваш специалист будет на связи 24/7, чтобы оперативно отвечать на вопросы, вносить правки по требованию преподавателя и сопровождать вас вплоть до успешной сдачи работы.
-
-Каждый проект выполняется профильным мастером, что гарантирует глубокое погружение в тему. Мы настолько уверены в качестве, что гарантируем высший балл.
 
 Выбери нужный раздел:"""
 
@@ -58,7 +37,9 @@ async def handle_subjects(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_subject_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, subject: str):
     user = update.effective_user
-    user_selections[user.id] = {'subject': subject}
+
+    db.save_user_selection(user.id, subject=subject)
+    db.save_user_activity(user.id, "subject_selection", f"Выбрал предмет: {subject}")
 
     text = f"""🎯 Выбран предмет: {subject}
 
@@ -72,11 +53,14 @@ async def handle_subject_selection(update: Update, context: ContextTypes.DEFAULT
 async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, topic: str):
     user = update.effective_user
 
-    if user.id in user_selections:
-        subject = user_selections[user.id]['subject']
-        user_selections[user.id]['topic'] = topic
+    selection = db.get_user_selection(user.id)
+    if selection and selection.get('subject'):
+        subject = selection['subject']
 
         if topic == "Другая тема (уточнить)":
+            db.save_user_selection(user.id, topic=topic)
+            db.save_user_activity(user.id, "custom_topic_selected", f"Выбрал свою тему для {subject}")
+
             text = f"""✏️ Выбрана своя тема
 
 Предмет: {subject}
@@ -84,12 +68,19 @@ async def handle_topic_selection(update: Update, context: ContextTypes.DEFAULT_T
 Напиши свою тему курсовой работы:"""
             await send_message_with_notify(update, context, text, f"Своя тема для {subject}")
         else:
+            db.save_user_selection(
+                user.id,
+                topic=topic,
+                price=PRICES['standard']
+            )
+            db.save_user_activity(user.id, "topic_selection", f"Выбрал тему: {topic} для {subject}")
+
             text = f"""✅ Тема выбрана!
 
 📚 Предмет: {subject}
 📝 Тема: {topic}
 
-💰 Стоимость: 2500 руб.
+💰 Стоимость: {PRICES['standard']} руб.
 ⏰ Срок выполнения: 7 дней
 
 🛒 Для оформления заказа нажми '🛒 Корзина'"""
@@ -100,16 +91,23 @@ async def handle_custom_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
     custom_topic = update.message.text
 
-    if user.id in user_selections and 'subject' in user_selections[user.id]:
-        subject = user_selections[user.id]['subject']
-        user_selections[user.id]['topic'] = custom_topic
+    selection = db.get_user_selection(user.id)
+    if selection and selection.get('subject'):
+        subject = selection['subject']
+
+        db.save_user_selection(
+            user.id,
+            custom_topic=custom_topic,
+            price=PRICES['custom_topic']
+        )
+        db.save_user_activity(user.id, "custom_topic_entered", f"Ввел свою тему: {custom_topic} для {subject}")
 
         text = f"""✅ Ваша тема принята!
 
 📚 Предмет: {subject}
 📝 Тема: {custom_topic}
 
-💰 Стоимость: 3000 руб. (индивидуальная тема)
+💰 Стоимость: {PRICES['custom_topic']} руб. (индивидуальная тема)
 ⏰ Срок выполнения: 10 дней
 
 🛒 Для оформления заказа нажми '🛒 Корзина'"""
@@ -122,15 +120,36 @@ async def handle_custom_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def clear_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    if user.id in user_selections:
-        del user_selections[user.id]
+    db.delete_user_selection(user.id)
+    db.save_user_activity(user.id, "clear_chat", "Очистил чат")
 
     await send_message_with_notify(update, context, "🧹 Чат полностью очищен!\n\nВсе выборы сброшены.", "Очистка чата")
 
 
-# ==================== АДМИН ФУНКЦИИ ====================
+async def handle_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    selection = db.get_user_selection(user.id)
+
+    if selection and (selection.get('topic') or selection.get('custom_topic')):
+        subject = selection.get('subject', 'Не выбран')
+        topic = selection.get('custom_topic') or selection.get('topic', 'Не выбрана')
+        price = selection.get('price', 0)
+
+        cart_text = f"""🛒 Твой заказ:
+
+📚 Предмет: {subject}
+📝 Тема: {topic}
+💰 Стоимость: {price} руб.
+
+💳 Для оплаты свяжитесь с менеджером: @manager"""
+
+        await send_message_with_notify(update, context, cart_text, "Просмотр корзины")
+    else:
+        await send_message_with_notify(update, context, "🛒 Корзина пуста. Сначала выбери тему работы!", "Корзина пуста")
+
+
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Активация админ-панели"""
     user = update.effective_user
     if user.id != ADMIN_ID:
         return
@@ -140,7 +159,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка кнопок админ-панели"""
     user = update.effective_user
     if user.id != ADMIN_ID:
         return
@@ -169,12 +187,13 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать список пользователей с кнопками для ответа"""
+    active_users = db.get_active_users(24)
+
     if not active_users:
         await update.message.reply_text("📭 Нет активных пользователей", reply_markup=admin_panel_keyboard())
         return
 
-    users_text = "👥 Активные пользователи:\n\n"
+    users_text = "👥 Активные пользователи (за последние 24 часа):\n\n"
     for user_id, user_info in active_users.items():
         users_text += f"👤 {user_info.get('first_name', 'Неизвестный')}\n"
         users_text += f"🆔 ID: {user_id}\n"
@@ -190,32 +209,35 @@ async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика бота"""
+    stats = db.get_user_stats()
+
     stats_text = f"""📊 Статистика бота
 
-👥 Активных пользователей: {len(active_users)}
-📝 Текущих заказов: {len(user_selections)}"""
+👥 Всего пользователей: {stats['total_users']}
+🔥 Активных за 24 часа: {stats['active_today']}
+📝 Текущих заказов: {stats['current_orders']}"""
 
     await update.message.reply_text(stats_text, reply_markup=admin_panel_keyboard())
 
 
 async def admin_reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /reply ID текст"""
     user = update.effective_user
     if user.id != ADMIN_ID:
         return
 
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text("❌ Формат: /reply ID ваш_текст\n\nПример: /reply 123456789 Привет! Как дела?")
+        await update.message.reply_text(
+            "❌ Формат: /reply ID ваш_текст\n\nПример: /reply 123456789 Привет! Как дела?")
         return
 
     try:
         target_user_id = int(context.args[0])
         reply_text = ' '.join(context.args[1:])
 
-        success = await send_message_to_user(context, target_user_id, reply_text)
+        success = await send_message_to_user(context, target_user_id, reply_text, update)
 
         if success:
+            active_users = db.get_active_users(1)
             target_user_info = active_users.get(target_user_id, {})
             user_name = target_user_info.get('first_name', 'Неизвестный пользователь')
             success_msg = f"✅ Ответ отправлен пользователю {user_name} (ID: {target_user_id})"
@@ -231,7 +253,6 @@ async def admin_reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def admin_reply_underscore(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /reply_123456789 текст"""
     user = update.effective_user
     if user.id != ADMIN_ID:
         return
@@ -263,9 +284,10 @@ async def admin_reply_underscore(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         target_user_id = int(user_id_part)
-        success = await send_message_to_user(context, target_user_id, reply_text)
+        success = await send_message_to_user(context, target_user_id, reply_text, update)
 
         if success:
+            active_users = db.get_active_users(1)
             target_user_info = active_users.get(target_user_id, {})
             user_name = target_user_info.get('first_name', 'Неизвестный пользователь')
             success_msg = f"✅ Ответ отправлен пользователю {user_name} (ID: {target_user_id})"
@@ -280,10 +302,7 @@ async def admin_reply_underscore(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(error_msg)
 
 
-# ==================== ОБРАБОТКА ИНЛАЙН-КНОПОК ====================
 async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатий на инлайн-кнопки"""
-    from telegram.ext import CallbackQueryHandler
     query = update.callback_query
     await query.answer()
 
@@ -296,6 +315,8 @@ async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TY
     if callback_data.startswith('quick_reply_'):
         try:
             user_id = int(callback_data.split('_')[2])
+            active_users = db.get_active_users(1)
+
             if user_id in active_users:
                 admin_states[user.id] = {'mode': 'awaiting_reply', 'target_id': user_id}
                 user_info = active_users[user_id]
@@ -324,12 +345,12 @@ async def handle_inline_buttons(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
 
-# ==================== ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ====================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text
 
-    # Если админ в админ-панели - обрабатываем админские функции
+    db.save_user(user.id, user.first_name, user.username)
+
     if user.id == ADMIN_ID and admin_states.get(user.id):
         state = admin_states.get(user.id)
 
@@ -342,6 +363,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 match = re.search(r'ID: (\d+)\)', text)
                 if match:
                     user_id = int(match.group(1))
+                    active_users = db.get_active_users(1)
+
                     if user_id in active_users:
                         admin_states[user.id] = {'mode': 'awaiting_reply', 'target_id': user_id}
                         user_info = active_users[user_id]
@@ -359,47 +382,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_admin_buttons(update, context)
         return
 
-    # Обработка пользовательских сообщений
     if text == '📚 Предметы':
+        db.save_user_activity(user.id, "menu_click", "Предметы")
         await handle_subjects(update, context)
     elif text == 'ℹ️ Гарантии':
+        db.save_user_activity(user.id, "menu_click", "Гарантии")
         await send_message_with_notify(update, context,
                                        "ℹ️ Наши гарантии:\n\n✅ Качество работ\n✅ Соблюдение сроков\n✅ Конфиденциальность",
                                        "Гарантии")
     elif text == '💰 Цены':
+        db.save_user_activity(user.id, "menu_click", "Цены")
         await send_message_with_notify(update, context,
                                        "💰 Наши цены:\n\n📝 Курсовая: от 2000 руб.\n⚡ Срочный заказ: +50%\n📚 Сложный предмет: +30%",
                                        "Цены")
     elif text == '👨‍🎓 О нас':
+        db.save_user_activity(user.id, "menu_click", "О нас")
         await send_message_with_notify(update, context,
                                        "👨‍🎓 Профессиональная команда авторов с опытом работы более 5 лет!", "О нас")
     elif text == '🛒 Корзина':
-        if user.id in user_selections and 'topic' in user_selections[user.id]:
-            selection = user_selections[user.id]
-            await send_message_with_notify(update, context,
-                                           f"🛒 Твой заказ:\n\nПредмет: {selection['subject']}\nТема: {selection['topic']}\nСтоимость: 2500 руб.\n\n💳 Раздел оплаты в разработке...",
-                                           "Корзина")
-        else:
-            await send_message_with_notify(update, context, "🛒 Корзина пуста. Сначала выбери тему работы!",
-                                           "Корзина пуста")
+        db.save_user_activity(user.id, "menu_click", "Корзина")
+        await handle_cart(update, context)
     elif text == '📞 Контакты':
+        db.save_user_activity(user.id, "menu_click", "Контакты")
         await send_message_with_notify(update, context,
                                        "📞 Наши контакты:\n\n👤 Менеджер: @manager\n📧 Email: info@example.com",
                                        "Контакты")
     elif text == '🧹 Очистить чат':
+        db.save_user_activity(user.id, "menu_click", "Очистить чат")
         await clear_chat(update, context)
     elif text in SUBJECTS_TOPICS.keys():
+        db.save_user_activity(user.id, "subject_selected", text)
         await handle_subject_selection(update, context, text)
     elif text == '↩️ Назад в меню':
+        db.save_user_activity(user.id, "menu_click", "Назад в меню")
         await start(update, context)
     elif text == '↩️ К выбору предмета':
+        db.save_user_activity(user.id, "menu_click", "К выбору предмета")
         await handle_subjects(update, context)
     elif text == '🏠 В главное меню':
+        db.save_user_activity(user.id, "menu_click", "В главное меню")
         await start(update, context)
     elif any(text in topics for topics in SUBJECTS_TOPICS.values()):
+        db.save_user_activity(user.id, "topic_selected", text)
         await handle_topic_selection(update, context, text)
-    elif user.id in user_selections and 'subject' in user_selections[user.id] and 'topic' not in user_selections[
-        user.id]:
-        await handle_custom_topic(update, context)
     else:
-        await send_message_with_notify(update, context, "Пожалуйста, используй кнопки меню 👆", text)
+        selection = db.get_user_selection(user.id)
+        if selection and selection.get('topic') == "Другая тема (уточнить)":
+            await handle_custom_topic(update, context)
+        else:
+            db.save_user_activity(user.id, "unknown_message", text)
+            await send_message_with_notify(update, context, "Пожалуйста, используй кнопки меню 👆", text)
