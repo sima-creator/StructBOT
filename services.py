@@ -42,7 +42,7 @@ async def notify_admin(application, user, message, user_message=None):
         logger.error(f"Ошибка отправки админу: {e}")
 
 
-async def send_message_with_notify(update, context, text, user_message=None):
+async def send_message_with_notify(update, context, text, user_message=None, parse_mode=None):
     user = update.effective_user
 
     from config import admin_states
@@ -53,10 +53,14 @@ async def send_message_with_notify(update, context, text, user_message=None):
         from keyboards import main_keyboard
         reply_markup = main_keyboard()
 
-    await update.message.reply_text(text, reply_markup=reply_markup)
+    # Отправляем сообщение с поддержкой parse_mode
+    if parse_mode:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
 
     if user.id != ADMIN_ID:
-        await notify_admin(context.application, user, text, user_message)
+        await notify_admin(context.application, user, text, user_message)  # ← оставляем context.application как в оригинале
 
 
 async def send_message_to_user(context, target_user_id, reply_text, update):
