@@ -95,7 +95,7 @@ async def notify_user_order_status(context, user_id, order_id, new_status):
 📊 Статус: {new_status}
 
 💬 Свяжитесь с менеджером для получения работы:
-👤 @manager
+👤 @struct_bot_admin
 
 📞 Мы ждем вашего сообщения!"""
 
